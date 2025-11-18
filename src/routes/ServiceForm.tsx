@@ -12,12 +12,14 @@ import {
 import { db } from "../firebase";
 import { createServiceOrderWithItems } from "../utils/firestore";
 import { Customer, Mechanic, Sparepart, Unit } from "@/types";
+import { useNavigate } from "react-router-dom";
 
 export default function ServiceForm() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [parts, setParts] = useState<Sparepart[]>([]);
   const [mechanics, setMechanics] = useState<Mechanic[]>([]);
+  const nav = useNavigate();
 
   const [form, setForm] = useState({
     customerId: "",
@@ -110,9 +112,10 @@ export default function ServiceForm() {
       // update service total
       await updateDoc(serviceDocRef, { totalCost });
 
-      alert("✅ Service created successfully!");
+      // alert("✅ Service created successfully!");
       setForm({ customerId: "", unitId: "", mechanicId: "", laborCost: 0 });
       setItems([]);
+      nav(`/print-service/${serviceDocRef.id}`);
     } catch (e: any) {
       alert("❌ Error: " + e.message);
     }
