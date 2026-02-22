@@ -234,6 +234,9 @@ export default function ServiceForm() {
                   <div className="flex-1">
                     {parts.find((p) => p.id === it.partId)?.name}
                   </div>
+                  <div className="flex-1">
+                    {parts.find((p) => p.id === it.partId)?.category}
+                  </div>
 
                   {/* Quantity Label + Input */}
                   <div className="flex flex-col">

@@ -6,11 +6,20 @@ import { ServiceItem, ServiceOrder } from "@/types";
 
 export default function PrintService() {
   const { id } = useParams();
+
   const [service, setService] = useState<ServiceOrder | null>(null);
   const [items, setItems] = useState<ServiceItem[]>([]);
+
   const [printMode, setPrintMode] = useState<"a4" | "receipt">("a4");
 
-  // Fetch data
+  // lookup maps
+  const [customers, setCustomers] = useState<Record<string, any>>({});
+  const [units, setUnits] = useState<Record<string, any>>({});
+  const [mechanics, setMechanics] = useState<Record<string, any>>({});
+  const [parts, setParts] = useState<Record<string, any>>({});
+
+  /* ================= LOAD SERVICE ================= */
+
   useEffect(() => {
     async function load() {
       if (!id) return;
@@ -26,17 +35,36 @@ export default function PrintService() {
       }
 
       const itemsSnap = await getDocs(collection(ref, "items"));
-      setItems(
-        itemsSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as ServiceItem),
-        }))
-      );
+      const list = itemsSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as ServiceItem),
+      }));
+
+      setItems(list);
+
+      /* ===== LOAD LOOKUPS ===== */
+
+      const [custSnap, unitSnap, mechSnap, partSnap] = await Promise.all([
+        getDocs(collection(db, "customers")),
+        getDocs(collection(db, "units")),
+        getDocs(collection(db, "mechanics")),
+        getDocs(collection(db, "spareparts")),
+      ]);
+
+      const mapDocs = (snap: any) =>
+        Object.fromEntries(snap.docs.map((d: any) => [d.id, d.data()]));
+
+      setCustomers(mapDocs(custSnap));
+      setUnits(mapDocs(unitSnap));
+      setMechanics(mapDocs(mechSnap));
+      setParts(mapDocs(partSnap));
     }
+
     load();
   }, [id]);
 
-  // Auto print after mode changes & service loaded
+  /* ================= AUTO PRINT ================= */
+
   useEffect(() => {
     if (service) {
       setTimeout(() => window.print(), 300);
@@ -45,24 +73,31 @@ export default function PrintService() {
 
   if (!service) return <div>Loading...</div>;
 
+  /* ================= HELPERS ================= */
+
+  const getName = (map: any, id?: string) =>
+    map?.[id || ""]?.name || map?.[id || ""]?.model || id || "-";
+
+  /* ================= UI ================= */
+
   return (
     <>
-      {/* Print Container */}
       <div className={printMode === "receipt" ? "receipt-paper" : "a4-paper"}>
         <h2 className="text-center font-bold text-lg">Service Receipt</h2>
 
         <p>ID: {service.id}</p>
-        <p>Customer: {service.customerId}</p>
-        <p>Unit: {service.unitId}</p>
-        <p>Mechanic: {service.mechanicId}</p>
+        <p>Customer: {getName(customers, service.customerId)}</p>
+        <p>Unit: {getName(units, service.unitId)}</p>
+        <p>Mechanic: {getName(mechanics, service.mechanicId)}</p>
         <p>Labor Cost: Rp {service.laborCost}</p>
 
         <hr className="my-3" />
 
         <h3 className="font-semibold mb-2">Parts</h3>
+
         {items.map((it) => (
           <div className="flex justify-between" key={it.id}>
-            <span>{it.partId}</span>
+            <span>{getName(parts, it.partId)}</span>
             <span>
               {it.qty} × Rp {it.price}
             </span>
@@ -78,7 +113,7 @@ export default function PrintService() {
         <p className="text-center mt-6">Thank you!</p>
       </div>
 
-      {/* Buttons (hidden in print mode) */}
+      {/* Buttons */}
       <div className="no-print flex justify-center gap-3 mt-4">
         <button
           onClick={() => setPrintMode("a4")}
@@ -95,13 +130,11 @@ export default function PrintService() {
         </button>
       </div>
 
-      {/* Styles */}
       <style>{`
         @media print {
           .no-print { display: none; }
         }
 
-        /* A4 MODE */
         .a4-paper {
           width: 100%;
           max-width: 800px;
@@ -112,7 +145,6 @@ export default function PrintService() {
           font-family: monospace;
         }
 
-        /* RECEIPT MODE (58mm) */
         .receipt-paper {
           width: 58mm;
           padding: 10px;
