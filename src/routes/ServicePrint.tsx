@@ -135,7 +135,7 @@ export default function PrintService() {
         </h2>
         <div style={{ textAlign: "center" }}>
           <img
-            src="/logo.jpeg" // ganti sesuai path kamu
+            src="/logo.png" // ganti sesuai path kamu
             alt="logo"
             style={{
               width: 250,
