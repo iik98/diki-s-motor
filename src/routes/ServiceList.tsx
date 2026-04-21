@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { ServiceOrder } from "@/types";
+import { IoIosCheckbox } from "react-icons/io";
 
 interface EnrichedService extends ServiceOrder {
   customerName: string;
@@ -146,9 +147,9 @@ const ServiceList: React.FC = () => {
                       {s.status === "open" && (
                         <button
                           onClick={() => markServiceCompleted(s.id)}
-                          className="px-1 py-1 ml-4 border border-green-600 text-green-400 rounded hover:bg-green-900/50 transition"
+                          className="px-1 py-1 ml-2  text-green-400 rounded hover:bg-green-900/50 transition"
                         >
-                          ✅
+                          <IoIosCheckbox size={16} color="green" />
                         </button>
                       )}
                     </td>
