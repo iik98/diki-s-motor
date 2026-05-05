@@ -36,7 +36,11 @@ export default function App() {
             to="/"
             className="text-2xl font-bold text-cyan-400 hover:text-cyan-300 drop-shadow-[0_0_8px_#00ffff] transition"
           >
-            ⚙️ Motor<span className="text-white">Work</span>
+            <img
+              src="/logo.png"
+              alt="logo"
+              style={{ width: 100, marginBottom: 10 }}
+            />
           </Link>
           <div className="md:hidden ">
             <button

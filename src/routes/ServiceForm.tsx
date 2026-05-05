@@ -26,6 +26,7 @@ export default function ServiceForm() {
     unitId: "",
     mechanicId: "",
     laborCost: 0,
+    note: "",
   });
   const [items, setItems] = useState<
     { partId: string; qty: number; price: number }[]
@@ -113,7 +114,13 @@ export default function ServiceForm() {
       await updateDoc(serviceDocRef, { totalCost });
 
       // alert("✅ Service created successfully!");
-      setForm({ customerId: "", unitId: "", mechanicId: "", laborCost: 0 });
+      setForm({
+        customerId: "",
+        unitId: "",
+        mechanicId: "",
+        laborCost: 0,
+        note: "",
+      });
       setItems([]);
       nav(`/print-service/${serviceDocRef.id}`);
     } catch (e: any) {
@@ -167,7 +174,7 @@ export default function ServiceForm() {
           </div>
 
           {/* Mechanic */}
-          <div className="flex flex-col">
+          {/* <div className="flex flex-col">
             <label className="text-sm text-cyan-300 mb-1">Mechanic</label>
             <select
               value={form.mechanicId}
@@ -181,10 +188,10 @@ export default function ServiceForm() {
                 </option>
               ))}
             </select>
-          </div>
+          </div> */}
 
           {/* Labor Cost */}
-          <div className="flex flex-col">
+          {/* <div className="flex flex-col">
             <label className="text-sm text-cyan-300 mb-1">Labor Cost</label>
             <input
               type="number"
@@ -196,15 +203,24 @@ export default function ServiceForm() {
               className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
           </div>
+          <div className="flex flex-col">
+            <label className="text-sm text-cyan-300 mb-1">Catatan</label>
+            <input
+              type="text"
+              placeholder="Catatan"
+              value={form.note}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}
+              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            />
+          </div> */}
         </div>
 
-        {/* Parts Selection */}
+        {/* Parts Selection 
         <div className="mt-6 backdrop-blur-md bg-gray-800/60 border border-gray-700 rounded-2xl p-5 shadow-xl shadow-cyan-900/30">
           <h3 className="text-xl font-semibold text-cyan-300 mb-3">
             🔧 Parts Used
           </h3>
 
-          {/* Parts dropdown */}
           <div className="flex flex-col mb-4">
             <label className="text-sm text-cyan-300 mb-1">Select Part</label>
             <select
@@ -223,7 +239,6 @@ export default function ServiceForm() {
             </select>
           </div>
 
-          {/* Selected Items */}
           {items.length > 0 && (
             <div className="divide-y divide-gray-700">
               {items.map((it, idx) => (
@@ -238,7 +253,6 @@ export default function ServiceForm() {
                     {parts.find((p) => p.id === it.partId)?.category}
                   </div>
 
-                  {/* Quantity Label + Input */}
                   <div className="flex flex-col">
                     <label className="text-xs text-cyan-300 mb-1">Qty</label>
                     <input
@@ -263,7 +277,7 @@ export default function ServiceForm() {
               ))}
             </div>
           )}
-        </div>
+        </div>*/}
 
         {/* Submit */}
         <div className="mt-6 flex justify-end">

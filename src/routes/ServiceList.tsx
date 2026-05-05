@@ -46,7 +46,7 @@ const ServiceList: React.FC = () => {
           serviceList.map(async (service) => {
             const [customerDoc, mechanicDoc, unitDoc] = await Promise.all([
               getDoc(doc(db, "customers", service.customerId)),
-              getDoc(doc(db, "mechanics", service.mechanicId)),
+              getDoc(doc(db, "mechanics", service.mechanicId || "id")),
               getDoc(doc(db, "units", service.unitId)),
             ]);
 

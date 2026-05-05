@@ -1,119 +1,357 @@
 import { useEffect, useState, useRef } from "react";
-import { doc, getDoc, collection, getDocs } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  collection,
+  getDocs,
+  onSnapshot,
+  query,
+  where,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+} from "firebase/firestore";
 import { db } from "../firebase";
 import { useParams } from "react-router-dom";
 import { ServiceItem, ServiceOrder } from "@/types";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+import { format } from "date-fns";
+
+function formatToDate(date?: Date | string | number): string {
+  return format(date ? new Date(date) : new Date(), "dd/MM/yyyy HH:mm");
+}
 
 export default function PrintService() {
   const { id } = useParams();
 
   const [service, setService] = useState<ServiceOrder | null>(null);
   const [items, setItems] = useState<ServiceItem[]>([]);
-  const [printMode, setPrintMode] = useState<"a4" | "receipt">("a4");
+  const [printMode] = useState<"a4" | "receipt">("a4");
+  const [isPrinting, setIsPrinting] = useState(false);
 
-  const [customers, setCustomers] = useState<Record<string, any>>({});
-  const [units, setUnits] = useState<Record<string, any>>({});
-  const [mechanics, setMechanics] = useState<Record<string, any>>({});
+  const [customer, setCustomer] = useState<any>(null);
+  const [unit, setUnit] = useState<any>(null);
+  const [mechanic, setMechanic] = useState<any>(null);
+  const [mechanics, setMechanics] = useState<any[]>([]);
+
   const [parts, setParts] = useState<Record<string, any>>({});
-
+  const [allParts, setAllParts] = useState<any[]>([]);
+  const [allJasa, setAllJasa] = useState<any>([]);
   const printRef = useRef<HTMLDivElement>(null);
 
+  // change service
+  const handleChangeService = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+
+    setService((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        [name]: value,
+      };
+    });
+  };
+
   /* ================= LOAD DATA ================= */
+  useEffect(() => {
+    const q = collection(db, "mechanics");
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      setMechanics(list);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const q = collection(db, "spareparts");
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        const filterPart = list.filter((p: any) => p?.category === "sparepart");
+        setAllParts(filterPart);
+        const filterJasa = list.filter((p: any) => p?.category === "jasa");
+        setAllJasa(filterJasa);
+      },
+      (error) => {
+        console.error("Error fetching spareparts:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     async function load() {
       if (!id) return;
 
+      // ===== service =====
       const ref = doc(db, "services", id);
       const snap = await getDoc(ref);
+      if (!snap.exists()) return;
 
-      if (snap.exists()) {
-        setService({
-          ...(snap.data() as ServiceOrder),
-          id: snap.id,
-        });
-      }
+      const serviceData = {
+        ...(snap.data() as ServiceOrder),
+        id: snap.id,
+      };
 
+      setService(serviceData);
+
+      // ===== items =====
       const itemsSnap = await getDocs(collection(ref, "items"));
       const list = itemsSnap.docs.map((d) => ({
         id: d.id,
         ...(d.data() as ServiceItem),
       }));
-
       setItems(list);
 
-      const [custSnap, unitSnap, mechSnap, partSnap] = await Promise.all([
-        getDocs(collection(db, "customers")),
-        getDocs(collection(db, "units")),
-        getDocs(collection(db, "mechanics")),
-        getDocs(collection(db, "spareparts")),
+      // ===== fetch related (ONLY BY ID) =====
+      const [customerSnap, unitSnap, mechanicSnap] = await Promise.all([
+        serviceData.customerId
+          ? getDoc(doc(db, "customers", serviceData.customerId))
+          : null,
+        serviceData.unitId
+          ? getDoc(doc(db, "units", serviceData.unitId))
+          : null,
+        serviceData.mechanicId
+          ? getDoc(doc(db, "mechanics", serviceData.mechanicId))
+          : null,
       ]);
 
-      const mapDocs = (snap: any) =>
-        Object.fromEntries(snap.docs.map((d: any) => [d.id, d.data()]));
+      setCustomer(customerSnap?.data() || null);
+      setUnit(unitSnap?.data() || null);
+      setMechanic(mechanicSnap?.data() || null);
 
-      setCustomers(mapDocs(custSnap));
-      setUnits(mapDocs(unitSnap));
-      setMechanics(mapDocs(mechSnap));
-      setParts(mapDocs(partSnap));
+      // ===== parts (ONLY USED ONES) =====
+      const partIds = [...new Set(list.map((i) => i.partId))];
+
+      const partDocs = await Promise.all(
+        partIds.map((pid) => getDoc(doc(db, "spareparts", pid)))
+      );
+
+      const partMap: Record<string, any> = {};
+      partDocs.forEach((p, i) => {
+        if (p.exists()) {
+          partMap[partIds[i]] = p.data();
+        }
+      });
+
+      setParts(partMap);
     }
 
     load();
   }, [id]);
+  const [jasaItems, setJasaItems] = useState<any[]>([]);
+  const [partItems, setPartItems] = useState<any[]>([]);
+
+  const handleAddJasa = () => {
+    setJasaItems((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        name: "", // ✅ wajib ada
+        qty: 1,
+        price: 0,
+        isNew: true,
+      },
+    ]);
+  };
+
+  const handleAddPart = () => {
+    setPartItems((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        partId: "",
+        packageName: "",
+        qty: 1,
+        price: 0,
+        isNew: true,
+      },
+    ]);
+  };
+
+  const handleChange = (
+    type: "jasa" | "part",
+    id: string,
+    field: string,
+    value: any
+  ) => {
+    const setter = type === "jasa" ? setJasaItems : setPartItems;
+
+    setter((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const handleDelete = (type: "jasa" | "part", id: string) => {
+    const setter = type === "jasa" ? setJasaItems : setPartItems;
+
+    setter((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  useEffect(() => {
+    if (!items.length || !Object.keys(parts).length) return;
+
+    const jasa = items.filter((it) => {
+      const part = parts[it.partId];
+      return part?.category === "jasa";
+    });
+
+    const part = items.filter((it) => {
+      const partData = parts[it.partId];
+      return partData?.category !== "jasa";
+    });
+
+    setJasaItems(jasa);
+    setPartItems(part);
+  }, [items, parts]);
+
+  const totalSparepart = partItems.reduce((sum, it) => {
+    return sum + it.qty * it.price;
+  }, 0);
+  const totalDiscountJasa = jasaItems.reduce((sum, it) => {
+    const subtotal = it.qty * it.price;
+    const discount = it.discount || 0;
+    const discountAmount = subtotal * (discount / 100);
+    return sum + discountAmount;
+  }, 0);
+
+  const totalJasa = jasaItems.reduce((sum, it) => {
+    return sum + it.qty * it.price;
+  }, 0);
+
+  const grandTotal = totalSparepart + totalJasa - totalDiscountJasa;
+
+  const handleSaveToFirestore = async () => {
+    if (!service?.id) return;
+
+    try {
+      const serviceRef = doc(db, "services", service.id);
+
+      // ===== UPDATE SERVICE =====
+      await updateDoc(serviceRef, {
+        ...service,
+        totalCost: grandTotal,
+        totalSparepart: totalSparepart,
+        totalJasa: totalJasa,
+        totalDiscountJasa: totalDiscountJasa,
+        // updatedAt: new Date(),
+      });
+
+      // ===== DELETE OLD ITEMS =====
+      const itemsRef = collection(serviceRef, "items");
+      const oldItemsSnap = await getDocs(itemsRef);
+
+      const deletePromises = oldItemsSnap.docs.map((d) =>
+        deleteDoc(doc(itemsRef, d.id))
+      );
+
+      await Promise.all(deletePromises);
+
+      // ===== SAVE NEW ITEMS (JASA + PART) =====
+      const allItems = [
+        ...jasaItems.map((it) => ({
+          partId: it.partId || it.jasaId || "manual-jasa",
+          qty: it.qty,
+          price: it.price,
+          discount: it.discount || 0,
+        })),
+        ...partItems.map((it) => ({
+          partId: it.partId,
+          qty: it.qty,
+          price: it.price,
+        })),
+      ];
+
+      const addPromises = allItems.map((item) => addDoc(itemsRef, item));
+
+      await Promise.all(addPromises);
+
+      console.log("✅ Saved to Firestore");
+    } catch (err) {
+      console.error("❌ Error saving:", err);
+      alert("Gagal save ke Firestore");
+      throw err;
+    }
+  };
+
+  console.log(service);
+  const thStyle = {
+    border: "1px solid #000",
+    padding: "6px",
+    // fontSize: "12px",
+    textAlign: "left",
+  };
+
+  const tdStyle = {
+    border: "1px solid #000",
+    padding: "6px",
+    // fontSize: "12px",
+  };
+  const rowStyle = {
+    display: "flex",
+    justifyContent: "space-between",
+    width: "100%",
+    // fontSize: "12px",
+  };
 
   if (!service) return <div>Loading...</div>;
-
-  /* ================= HELPERS ================= */
-  const getName = (map: any, id?: string) =>
-    map?.[id || ""]?.name || map?.[id || ""]?.model || id || "-";
 
   /* ================= GENERATE PDF ================= */
   const handleGeneratePDF = async () => {
     if (!printRef.current) return;
 
+    setIsPrinting(true);
+    await new Promise((res) => setTimeout(res, 200));
+
     try {
+      handleSaveToFirestore();
+
       const canvas = await html2canvas(printRef.current, {
-        scale: 2,
+        scale: 4,
         useCORS: true,
         backgroundColor: "#ffffff",
       });
 
-      const imgData = canvas.toDataURL("image/png");
+      const imgData = canvas.toDataURL("image/jpeg");
 
-      const pdf =
-        printMode === "receipt"
-          ? new jsPDF({
-              orientation: "portrait",
-              unit: "mm",
-              format: [58, canvas.height * 0.264],
-            })
-          : new jsPDF("p", "mm", "a4");
+      const imgWidth = 80;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-      if (printMode === "receipt") {
-        pdf.addImage(imgData, "PNG", 0, 0, 58, canvas.height * 0.264);
-      } else {
-        const imgWidth = 210;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
-      }
+      // 🔥 HEIGHT FLEKSIBEL (1 PAGE PANJANG)
+      const pdf = new jsPDF("p", "mm", [imgWidth, imgHeight]);
 
-      // buka tab baru
+      pdf.addImage(imgData, "JPEG", 0, 0, imgWidth, imgHeight);
+
       const blob = pdf.output("blob");
       const url = URL.createObjectURL(blob);
 
       const newWindow = window.open(url, "_blank");
 
-      // fallback kalau diblok
       if (!newWindow) {
         const link = document.createElement("a");
         link.href = url;
-        link.download = `service-${service.id}.pdf`;
+        link.download = `service-${service?.id}.pdf`;
         link.click();
       }
     } catch (err) {
-      console.error("PDF error:", err);
+      console.error(err);
       alert("Gagal generate PDF");
+    } finally {
+      setIsPrinting(false);
     }
   };
 
@@ -122,75 +360,485 @@ export default function PrintService() {
     <>
       <div
         ref={printRef}
-        className={printMode === "receipt" ? "receipt-paper" : "a4-paper"}
-        style={{
-          backgroundColor: "#ffffff",
-          color: "#000000",
-        }}
+        className="a4-paper"
+        style={{ background: "#fff", color: "#000" }}
       >
-        <h2
-          style={{ textAlign: "center", fontWeight: "bold", marginBottom: 10 }}
-        >
+        <h2 style={{ textAlign: "center", marginBottom: 10 }}>
           Service Receipt
         </h2>
-        <div style={{ textAlign: "center" }}>
+
+        <div style={{ display: "flex", justifyContent: "center" }}>
           <img
-            src="/logo.png" // ganti sesuai path kamu
+            src="/logo.png"
             alt="logo"
-            style={{
-              width: 250,
-              margin: "0 auto",
-              display: "block",
-            }}
+            style={{ width: 350, marginBottom: 10 }}
           />
         </div>
-        <p>ID: {service.id}</p>
-        <p>Customer: {getName(customers, service.customerId)}</p>
-        <p>Unit: {getName(units, service.unitId)}</p>
-        <p>Mechanic: {getName(mechanics, service.mechanicId)}</p>
-        <p>Labor Cost: Rp {service.laborCost}</p>
 
-        <hr style={{ marginTop: 10 }} />
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            // fontSize: 20,
+          }}
+        >
+          {/* left */}
+          <div>
+            <p>ID: {service.id}</p>
+            <p>Nama Customer: {customer?.name || "-"}</p>
+            <p>No hp Customer: {customer?.telepon || "-"}</p>
+            <p>
+              Unit:
+              {`${unit?.make} ${unit?.model} (${unit?.plate})` ||
+                unit?.model ||
+                "-"}
+            </p>
+            <p>
+              Mechanic:{" "}
+              {mechanic?.name && isPrinting ? (
+                mechanic?.name
+              ) : (
+                <select
+                  name="mechanicId"
+                  value={service?.mechanicId || ""}
+                  onChange={(e) => {
+                    const selectedMech = mechanics.find(
+                      (m) => m.id === e.target.value
+                    );
+                    setService((prev) =>
+                      prev ? { ...prev, mechanicId: e.target.value } : prev
+                    );
+                    setMechanic(selectedMech);
+                  }}
+                >
+                  <option value="" disabled>
+                    Pilih Mechanic
+                  </option>
 
-        <h3>Parts</h3>
+                  {mechanics.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </p>
+          </div>
+          {/* right */}
+          <div>
+            <p>Date: {formatToDate(service.createdAt?.toDate?.())}</p>
+            <p>Alamat Bengkel: Jl sblaska</p>
+          </div>
+        </div>
+        <br />
+        <hr />
+        <br />
+        {/* ================= JASA ================= */}
+        <h3>Service</h3>
+        <table
+          style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}
+        >
+          <thead>
+            <tr>
+              <th style={thStyle}>No</th>
+              <th style={thStyle}>Nama Jasa</th>
+              <th style={thStyle}>Qty</th>
+              <th style={thStyle}>Harga</th>
+              <th style={thStyle}>Disc</th>
+              <th style={thStyle}>Total</th>
+              {!isPrinting && <th style={thStyle}></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {jasaItems.map((it, index) => {
+              const part = parts[it.partId];
 
-        {items.map((it) => (
-          <div
-            key={it.id}
+              const subtotal = it.qty * it.price;
+              const discount = it.discount || 0;
+              const discountAmount = subtotal * (discount / 100);
+              const finalTotal = subtotal - discountAmount;
+
+              return (
+                <tr key={it.id}>
+                  <td style={tdStyle}>{index + 1}</td>
+
+                  {/* NAMA */}
+                  <td
+                    style={{
+                      border: "1px solid #000",
+                      padding: "6px",
+                      width: 180,
+                    }}
+                  >
+                    {it.isNew && !isPrinting ? (
+                      <select
+                        value={it.jasaId || ""}
+                        onChange={(e) => {
+                          const selectedPart = allJasa.find(
+                            (p: { id: string }) => p.id === e.target.value
+                          );
+
+                          handleChange("jasa", it.id, "jasaId", e.target.value);
+                          handleChange(
+                            "jasa",
+                            it.id,
+                            "price",
+                            selectedPart?.price || 0
+                          );
+                          handleChange(
+                            "jasa",
+                            it.id,
+                            "name",
+                            selectedPart?.name || ""
+                          );
+                        }}
+                      >
+                        <option hidden>Pilih Jasa</option>
+                        {allJasa.map((p: any) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      part?.name || it.name || "-"
+                    )}
+                  </td>
+
+                  {/* QTY */}
+                  <td style={tdStyle}>
+                    {it.isNew && !isPrinting ? (
+                      <input
+                        type="number"
+                        value={it.qty}
+                        onChange={(e) =>
+                          handleChange(
+                            "jasa",
+                            it.id,
+                            "qty",
+                            Number(e.target.value)
+                          )
+                        }
+                        style={{ width: 60 }}
+                      />
+                    ) : (
+                      it.qty
+                    )}
+                  </td>
+
+                  {/* HARGA */}
+                  <td style={tdStyle}>
+                    {it.isNew && !isPrinting ? (
+                      <input
+                        type="number"
+                        value={it.price}
+                        onChange={(e) =>
+                          handleChange(
+                            "jasa",
+                            it.id,
+                            "price",
+                            Number(e.target.value)
+                          )
+                        }
+                        style={{ width: 100 }}
+                      />
+                    ) : (
+                      `Rp ${it.price.toLocaleString("id-ID")}`
+                    )}
+                  </td>
+
+                  {/* DISCOUNT */}
+                  <td style={tdStyle}>
+                    {it.isNew && !isPrinting ? (
+                      <div style={{ display: "flex" }}>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={it.discount || 0}
+                          onChange={(e) =>
+                            handleChange(
+                              "jasa",
+                              it.id,
+                              "discount",
+                              Number(e.target.value)
+                            )
+                          }
+                          style={{ width: 60 }}
+                        />
+                        <span>%</span>
+                      </div>
+                    ) : (
+                      `${discount}%`
+                    )}
+                  </td>
+
+                  {/* TOTAL SETELAH DISCOUNT */}
+                  <td style={tdStyle}>
+                    Rp {finalTotal.toLocaleString("id-ID")}
+                  </td>
+
+                  {!isPrinting && (
+                    <td style={tdStyle}>
+                      <button
+                        onClick={() => handleDelete("jasa", it.id)}
+                        style={{
+                          color: "red",
+                          cursor: "pointer",
+                          border: "none",
+                          background: "transparent",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {!isPrinting && (
+          <button
+            onClick={handleAddJasa}
             style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: printMode === "receipt" ? 12 : 14,
+              marginTop: 10,
+              padding: "6px 12px",
+              cursor: "pointer",
             }}
           >
-            <span>{getName(parts, it.partId)}</span>
-            <span>
-              {it.qty} × Rp {it.price}
-            </span>
+            + Tambah Service
+          </button>
+        )}
+
+        <br />
+
+        {/* ================= PARTS ================= */}
+        <h3>Parts</h3>
+        <table
+          style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}
+        >
+          <thead>
+            <tr>
+              <th style={thStyle}>No</th>
+              <th style={thStyle}>Package</th>
+              <th style={thStyle}>Nama Item</th>
+              <th style={thStyle}>Qty</th>
+              <th style={thStyle}>Harga</th>
+              <th style={thStyle}>Total</th>
+              {!isPrinting && <th style={thStyle}></th>}
+            </tr>
+          </thead>
+
+          <tbody>
+            {partItems.map((it, index) => {
+              const part = parts[it.partId];
+
+              return (
+                <tr key={it.id}>
+                  {/* NO */}
+                  <td style={tdStyle}>{index + 1}</td>
+
+                  {/* PACKAGE */}
+                  <td style={tdStyle}>{it.packageName || "-"}</td>
+
+                  {/* NAMA ITEM (DROPDOWN) */}
+                  <td style={tdStyle}>
+                    {it.isNew && !isPrinting ? (
+                      <select
+                        value={it.partId || ""}
+                        onChange={(e) => {
+                          const selectedPart = allParts.find(
+                            (p) => p.id === e.target.value
+                          );
+
+                          handleChange("part", it.id, "partId", e.target.value);
+                          handleChange(
+                            "part",
+                            it.id,
+                            "price",
+                            selectedPart?.price || 0
+                          );
+                          handleChange(
+                            "part",
+                            it.id,
+                            "name",
+                            selectedPart?.name || ""
+                          );
+                        }}
+                      >
+                        <option selected hidden>
+                          Pilih Part
+                        </option>
+
+                        {allParts.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      part?.name || it.name || "-"
+                    )}
+                  </td>
+
+                  {/* QTY */}
+                  <td style={tdStyle}>
+                    {it.isNew && !isPrinting ? (
+                      <input
+                        type="number"
+                        value={it.qty ?? 1}
+                        min={1}
+                        onChange={(e) =>
+                          handleChange(
+                            "part",
+                            it.id,
+                            "qty",
+                            Number(e.target.value)
+                          )
+                        }
+                        style={{ width: 60 }}
+                      />
+                    ) : (
+                      it.qty
+                    )}
+                  </td>
+
+                  {/* HARGA */}
+                  <td style={tdStyle}>
+                    Rp {(it.price || 0).toLocaleString("id-ID")}
+                  </td>
+
+                  {/* TOTAL */}
+                  <td style={tdStyle}>
+                    Rp {(it.qty * it.price || 0).toLocaleString("id-ID")}
+                  </td>
+                  {!isPrinting && (
+                    <td style={tdStyle}>
+                      <button
+                        onClick={() => handleDelete("part", it.id)}
+                        style={{
+                          color: "red",
+                          cursor: "pointer",
+                          border: "none",
+                          background: "transparent",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {!isPrinting && (
+          <button
+            onClick={handleAddPart}
+            style={{
+              marginTop: 10,
+              padding: "6px 12px",
+              cursor: "pointer",
+            }}
+          >
+            + Tambah Part
+          </button>
+        )}
+
+        <hr />
+
+        <div style={{ marginTop: 20 }}>
+          <div style={rowStyle}>
+            <span>Total Sparepart</span>
+            <span>Rp {totalSparepart.toLocaleString("id-ID")}</span>
           </div>
-        ))}
 
-        <hr style={{ marginTop: 10 }} />
+          <div style={rowStyle}>
+            <span>Total Jasa</span>
+            <span>Rp {totalJasa.toLocaleString("id-ID")}</span>
+          </div>
+          <div style={rowStyle}>
+            <span>Total Discount</span>
+            <span>- Rp {totalDiscountJasa.toLocaleString("id-ID")}</span>
+          </div>
 
-        <h2 style={{ textAlign: "right" }}>Total: Rp {service.totalCost}</h2>
+          <div
+            style={{
+              ...rowStyle,
+              fontWeight: "bold",
+              borderTop: "1px solid #000",
+              marginTop: 6,
+              paddingTop: 6,
+            }}
+          >
+            <span>Grand Total</span>
+            <span>Rp {grandTotal.toLocaleString("id-ID")}</span>
+          </div>
+        </div>
+
+        <br />
+        <p>
+          Catatan:{" "}
+          {service.note && isPrinting ? (
+            service?.note
+          ) : (
+            <input
+              className="input"
+              name="note"
+              value={service?.note || ""}
+              onChange={handleChangeService}
+            />
+          )}
+        </p>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 60,
+          }}
+        >
+          {/* KIRI - KONSUMEN */}
+          <div style={{ textAlign: "center", width: "45%" }}>
+            <p>Konsumen</p>
+
+            <div
+              style={{
+                height: 80,
+              }}
+            />
+
+            <p style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
+              {customer?.name || "Konsumen"}
+            </p>
+          </div>
+
+          {/* KANAN - MEKANIK */}
+          <div style={{ textAlign: "center", width: "45%" }}>
+            <p>Mechanic</p>
+
+            <div
+              style={{
+                height: 80,
+              }}
+            />
+
+            <p style={{ borderTop: "1px solid #000", paddingTop: 4 }}>
+              {mechanic?.name || "Mechanic"}
+            </p>
+          </div>
+        </div>
 
         <p style={{ textAlign: "center", marginTop: 20 }}>Thank you!</p>
       </div>
 
-      {/* BUTTONS */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: 10,
-          marginTop: 20,
-        }}
-      >
-        {/* <button onClick={() => setPrintMode("a4")}>A4 Mode</button>
-        <button onClick={() => setPrintMode("receipt")}>Receipt Mode</button> */}
-        <button className="button" onClick={handleGeneratePDF}>
-          Save PDF
-        </button>
+      {/* BUTTON */}
+      <div style={{ textAlign: "center", marginTop: 20 }}>
+        <button onClick={handleGeneratePDF}>Save PDF</button>
       </div>
 
       <style>{`
@@ -202,20 +850,10 @@ export default function PrintService() {
           width: 210mm;
           min-height: 297mm;
           margin: 20px auto;
-          padding: 20mm;
-          background: #ffffff !important;
-          color: #000000 !important;
+          padding: 10mm;
+          background: white;
           font-family: monospace;
-        }
-
-        .receipt-paper {
-          width: 58mm;
-          margin: 20px auto;
-          padding: 10px;
-          font-size: 12px;
-          background: #ffffff !important;
-          color: #000000 !important;
-          font-family: monospace;
+          font-size:25px;
         }
       `}</style>
     </>
