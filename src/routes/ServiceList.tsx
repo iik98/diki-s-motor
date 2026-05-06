@@ -14,6 +14,7 @@ import { db } from "../firebase";
 import { ServiceOrder } from "@/types";
 import { IoIosCheckbox } from "react-icons/io";
 import SparepartName from "@/components/GetSparepart";
+import { useNavigate } from "react-router-dom";
 
 interface EnrichedService extends ServiceOrder {
   customerName: string;
@@ -25,6 +26,7 @@ interface EnrichedService extends ServiceOrder {
 const ServiceList: React.FC = () => {
   const [services, setServices] = useState<EnrichedService[]>([]);
   const [loading, setLoading] = useState(true);
+  const nav = useNavigate();
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "services"), async (snapshot) => {
@@ -164,11 +166,12 @@ const ServiceList: React.FC = () => {
                 <tr>
                   <th className="px-4 py-3 text-left">Customer</th>
                   <th className="px-4 py-3 text-left">Unit</th>
-                  <th className="px-4 py-3 text-left">Mechanic</th>
+                  <th className="px-4 py-3 text-left">Mekanik</th>
                   <th className="px-4 py-3 text-left">Status</th>
                   <th className="px-4 py-3 text-right">Part&Jasa</th>
-                  <th className="px-4 py-3 text-right">Total Cost</th>
+                  <th className="px-4 py-3 text-right">Total Pembayaran</th>
                   <th className="px-4 py-3 text-right">Date</th>
+                  <th className="px-4 py-3 text-right">Pdf</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,6 +214,11 @@ const ServiceList: React.FC = () => {
                       Rp {s.totalCost.toLocaleString("id-ID")}
                     </td>
                     <td className="px-4 py-3 text-right">{s.createdAt}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => nav(`/print-service/${s.id}`)}>
+                        link
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
