@@ -7,15 +7,19 @@ import {
   onSnapshot,
   updateDoc,
   serverTimestamp,
+  increment,
+  runTransaction,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { ServiceOrder } from "@/types";
 import { IoIosCheckbox } from "react-icons/io";
+import SparepartName from "@/components/GetSparepart";
 
 interface EnrichedService extends ServiceOrder {
   customerName: string;
   mechanicName: string;
   unitPlate: string;
+  items: any[];
 }
 
 const ServiceList: React.FC = () => {
@@ -44,11 +48,13 @@ const ServiceList: React.FC = () => {
         // Fetch related documents in parallel
         const enriched: EnrichedService[] = await Promise.all(
           serviceList.map(async (service) => {
-            const [customerDoc, mechanicDoc, unitDoc] = await Promise.all([
-              getDoc(doc(db, "customers", service.customerId)),
-              getDoc(doc(db, "mechanics", service.mechanicId || "id")),
-              getDoc(doc(db, "units", service.unitId)),
-            ]);
+            const [customerDoc, mechanicDoc, unitDoc, itemsSnap] =
+              await Promise.all([
+                getDoc(doc(db, "customers", service.customerId || "id")),
+                getDoc(doc(db, "mechanics", service.mechanicId || "id")),
+                getDoc(doc(db, "units", service.unitId || "id")),
+                getDocs(collection(db, "services", service.id, "items")),
+              ]);
 
             const customerName = customerDoc.exists()
               ? customerDoc.data()?.name || "-"
@@ -59,12 +65,16 @@ const ServiceList: React.FC = () => {
             const unitPlate = unitDoc.exists()
               ? unitDoc.data()?.plate || "-"
               : "-";
-
+            const items = itemsSnap.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            }));
             return {
               ...service,
               customerName,
               mechanicName,
               unitPlate,
+              items,
             };
           })
         );
@@ -81,23 +91,59 @@ const ServiceList: React.FC = () => {
   }, []);
 
   //   update status
-  const markServiceCompleted = async (serviceId: string) => {
+  const markServiceCompleted = async (serviceId: string, items: any[]) => {
     try {
-      const ref = doc(db, "services", serviceId);
+      await runTransaction(db, async (transaction) => {
+        const serviceRef = doc(db, "services", serviceId);
 
-      await updateDoc(ref, {
-        status: "completed",
-        completedAt: serverTimestamp(), // optional
+        // ✅ 1. READ SEMUA DULU
+        const sparepartSnaps: any[] = [];
+
+        for (const item of items) {
+          if (!item?.partId || !item?.qty) continue;
+
+          const sparepartRef = doc(db, "spareparts", item.partId);
+          const snap = await transaction.get(sparepartRef);
+
+          if (!snap.exists()) {
+            throw new Error(`Sparepart tidak ditemukan: ${item.partId}`);
+          }
+
+          sparepartSnaps.push({
+            ref: sparepartRef,
+            data: snap.data(),
+            qty: item.qty,
+          });
+        }
+
+        // ✅ 2. BARU WRITE SEMUA
+        transaction.update(serviceRef, {
+          status: "completed",
+          completedAt: serverTimestamp(),
+        });
+
+        for (const sp of sparepartSnaps) {
+          const currentStock = sp.data.stock ?? 0;
+
+          if (currentStock < sp.qty) {
+            throw new Error(`Stock tidak cukup`);
+          }
+
+          transaction.update(sp.ref, {
+            stock: currentStock - sp.qty,
+            sold: increment(sp.qty),
+          });
+        }
       });
 
-      console.log("Service updated to completed");
+      console.log("Transaction success");
       return true;
     } catch (error) {
-      console.error("Failed to update service:", error);
+      console.error("Transaction failed:", error);
       return false;
     }
   };
-
+  console.log(services);
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-950 to-gray-900 text-cyan-100 p-6">
       <div className="max-w-7xl mx-auto">
@@ -120,7 +166,7 @@ const ServiceList: React.FC = () => {
                   <th className="px-4 py-3 text-left">Unit</th>
                   <th className="px-4 py-3 text-left">Mechanic</th>
                   <th className="px-4 py-3 text-left">Status</th>
-                  <th className="px-4 py-3 text-right">Labor Cost</th>
+                  <th className="px-4 py-3 text-right">Part&Jasa</th>
                   <th className="px-4 py-3 text-right">Total Cost</th>
                   <th className="px-4 py-3 text-right">Date</th>
                 </tr>
@@ -146,15 +192,20 @@ const ServiceList: React.FC = () => {
                       </span>
                       {s.status === "open" && (
                         <button
-                          onClick={() => markServiceCompleted(s.id)}
+                          onClick={() => markServiceCompleted(s.id, s.items)}
                           className="px-1 py-1 ml-2  text-green-400 rounded hover:bg-green-900/50 transition"
                         >
                           <IoIosCheckbox size={16} color="green" />
                         </button>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      Rp {s.laborCost.toLocaleString("id-ID")}
+                    <td className="px-4 py-3 text-left">
+                      {s.items?.map((it) => (
+                        <p style={{ whiteSpace: "nowrap" }}>
+                          <SparepartName partId={it.partId} /> x {it?.qty} ={" "}
+                          {it?.qty * it?.price}
+                        </p>
+                      ))}
                     </td>
                     <td className="px-4 py-3 text-right">
                       Rp {s.totalCost.toLocaleString("id-ID")}

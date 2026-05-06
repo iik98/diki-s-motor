@@ -7,17 +7,27 @@ import {
   doc,
   serverTimestamp,
   setDoc,
+  query,
+  where,
+  orderBy,
+  startAfter,
+  limit,
+  endBefore,
+  limitToLast,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { Link, useNavigate } from "react-router-dom";
+import { FaMotorcycle } from "react-icons/fa6";
+import { HiOutlineArrowLeft, HiOutlineArrowRight } from "react-icons/hi";
 
 interface Customer {
   id?: string;
   name: string;
   telepon: string;
   address: string;
+  units?: any[];
 }
-
+const PAGE_SIZE = 10;
 export default function Customers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [open, setOpen] = useState(false);
@@ -33,16 +43,73 @@ export default function Customers() {
     year: "",
   });
   const nav = useNavigate();
-  console.log(form, formUnit);
+  console.log(customers);
   // Load customers from Firestore
-  useEffect(() => {
-    async function load() {
-      const snap = await getDocs(collection(db, "customers"));
-      setCustomers(
-        snap.docs.map((d) => ({ id: d.id, ...(d.data() as Customer) }))
+  const [firstDoc, setFirstDoc] = useState<any>(null);
+  const [lastDoc, setLastDoc] = useState<any>(null);
+
+  const fetchPage = async (direction: "next" | "prev" | "initial") => {
+    let q;
+
+    if (direction === "next" && lastDoc) {
+      q = query(
+        collection(db, "customers"),
+        orderBy("name"),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
       );
+    } else if (direction === "prev" && firstDoc) {
+      q = query(
+        collection(db, "customers"),
+        orderBy("name"),
+        endBefore(firstDoc),
+        limitToLast(PAGE_SIZE)
+      );
+    } else {
+      q = query(collection(db, "customers"), orderBy("name"), limit(PAGE_SIZE));
     }
-    load();
+
+    const customerSnap = await getDocs(q);
+    if (customerSnap.empty) return;
+
+    setFirstDoc(customerSnap.docs[0]);
+    setLastDoc(customerSnap.docs[customerSnap.docs.length - 1]);
+
+    const customerIds = customerSnap.docs.map((d) => d.id);
+
+    // ✅ TANPA chunk
+    const unitSnap = await getDocs(
+      query(collection(db, "units"), where("customerId", "in", customerIds))
+    );
+
+    const unitsByCustomer: Record<string, any[]> = {};
+
+    unitSnap.docs.forEach((doc: any) => {
+      const data = { id: doc.id, ...doc.data() };
+      const customerId = data.customerId;
+
+      if (!unitsByCustomer[customerId]) {
+        unitsByCustomer[customerId] = [];
+      }
+
+      unitsByCustomer[customerId].push(data);
+    });
+
+    const result: Customer[] = customerSnap.docs.map((d) => {
+      const data = d.data() as Customer;
+
+      return {
+        id: d.id,
+        ...data,
+        units: unitsByCustomer[d.id] || [],
+      };
+    });
+
+    setCustomers(result);
+  };
+
+  useEffect(() => {
+    fetchPage("initial");
   }, []);
 
   // Add new customer
@@ -52,7 +119,10 @@ export default function Customers() {
     const { plate, make, model, year } = formUnit;
     if (!name || !telepon || !address || !plate || !make || !model || !year)
       return alert("isi form yg belum diisi!");
-    const ref = await addDoc(collection(db, "customers"), form);
+    const ref = await addDoc(collection(db, "customers"), {
+      ...form,
+      createdAt: serverTimestamp(),
+    });
     const refUinit = await addDoc(collection(db, "units"), {
       ...formUnit,
       customerId: ref.id,
@@ -93,6 +163,65 @@ export default function Customers() {
     setForm((prev) => ({ ...prev, [name]: value }));
   }
 
+  // search
+  const [searchPlate, setSearchPlate] = useState("");
+
+  const handleSearch = async () => {
+    if (!searchPlate) {
+      fetchPage("initial");
+      return;
+    }
+
+    // cari unit berdasarkan plate
+    const unitSnap = await getDocs(
+      query(
+        collection(db, "units"),
+        where("plate", ">=", searchPlate.toUpperCase()),
+        where("plate", "<=", searchPlate.toUpperCase() + "\uf8ff")
+      )
+    );
+
+    if (unitSnap.empty) {
+      setCustomers([]);
+      return;
+    }
+
+    const customerIds = [
+      ...new Set(unitSnap.docs.map((doc) => doc.data().customerId)),
+    ];
+
+    // ambil customer dari hasil unit
+    const customerSnap = await getDocs(
+      query(collection(db, "customers"), where("__name__", "in", customerIds))
+    );
+
+    // mapping unit ke customer
+    const unitsByCustomer: Record<string, any[]> = {};
+
+    unitSnap.docs.forEach((doc: any) => {
+      const data = { id: doc.id, ...doc.data() };
+      const customerId = data.customerId;
+
+      if (!unitsByCustomer[customerId]) {
+        unitsByCustomer[customerId] = [];
+      }
+
+      unitsByCustomer[customerId].push(data);
+    });
+
+    const result: Customer[] = customerSnap.docs.map((d) => {
+      const data = d.data() as Customer;
+
+      return {
+        id: d.id,
+        ...data,
+        units: unitsByCustomer[d.id] || [],
+      };
+    });
+
+    setCustomers(result);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 text-gray-100 p-6 font-mono">
       <div className="max-w-3xl mx-auto">
@@ -105,6 +234,21 @@ export default function Customers() {
             className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-md shadow-lg shadow-cyan-500/30 transition-transform hover:scale-105"
           >
             + Tambah Customer
+          </button>
+        </div>
+        <div className="mb-4 flex gap-2">
+          <input
+            type="text"
+            placeholder="Search plate..."
+            value={searchPlate}
+            onChange={(e) => setSearchPlate(e.target.value.toUpperCase())}
+            className="px-3 py-2 bg-gray-800 border border-cyan-700 rounded w-full"
+          />
+          <button
+            onClick={handleSearch}
+            className="px-4 py-2 bg-cyan-600 rounded"
+          >
+            Search
           </button>
         </div>
 
@@ -131,7 +275,20 @@ export default function Customers() {
                   <p className="text-sm text-gray-400">
                     📞 {c.telepon || "-"} <br />
                     📍 {c.address || "-"}
+                    <br />
                   </p>
+                  <div
+                    className="text-sm text-gray-400 "
+                    style={{ display: "flex" }}
+                  >
+                    <FaMotorcycle />
+                    <div style={{ marginLeft: 10, display: "flex" }}>
+                      {" "}
+                      {c?.units?.map((u: any) => (
+                        <p key={u.plate}>{u.plate}| </p>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <button
                   onClick={() => remove(c.id!)}
@@ -142,6 +299,29 @@ export default function Customers() {
               </li>
             ))}
           </ul>
+          <div
+            style={{
+              marginTop: 20,
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
+            <button
+              onClick={() => fetchPage("prev")}
+              className="flex items-center gap-1"
+            >
+              <HiOutlineArrowLeft className="w-4 h-4" />
+              Prev
+            </button>
+
+            <button
+              onClick={() => fetchPage("next")}
+              className="flex items-center gap-1"
+            >
+              Next
+              <HiOutlineArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 

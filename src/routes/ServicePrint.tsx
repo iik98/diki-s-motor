@@ -645,7 +645,13 @@ export default function PrintService() {
                   <td style={tdStyle}>{it.packageName || "-"}</td>
 
                   {/* NAMA ITEM (DROPDOWN) */}
-                  <td style={tdStyle}>
+                  <td
+                    style={{
+                      border: "1px solid #000",
+                      padding: "6px",
+                      width: 180,
+                    }}
+                  >
                     {it.isNew && !isPrinting ? (
                       <select
                         value={it.partId || ""}
