@@ -19,6 +19,7 @@ import { db } from "../firebase";
 import { Link, useNavigate } from "react-router-dom";
 import { FaMotorcycle } from "react-icons/fa6";
 import { HiOutlineArrowLeft, HiOutlineArrowRight } from "react-icons/hi";
+import { generateServiceId } from "@/components/Counter";
 
 interface Customer {
   id?: string;
@@ -129,7 +130,8 @@ export default function Customers() {
       createdAt: serverTimestamp(),
     });
     setCustomers((prev) => [{ id: ref.id, ...form }, ...prev]);
-    const serviceDocRef = doc(db, "services", `ORD-${formUnit.plate}-1`);
+    const serviceId = await generateServiceId();
+    const serviceDocRef = doc(db, "services", serviceId);
 
     // prepare base service data
     const serviceData = {
@@ -141,7 +143,7 @@ export default function Customers() {
     };
 
     // create service document
-    const refServ = await setDoc(serviceDocRef, serviceData);
+    await setDoc(serviceDocRef, serviceData);
     setForm({ name: "", telepon: "", address: "" });
     setFormUnit({ make: "", model: "", plate: "", year: "" });
     nav(`/print-service/${serviceDocRef.id}`);
@@ -164,252 +166,454 @@ export default function Customers() {
   }
 
   // search
-  const [searchPlate, setSearchPlate] = useState("");
+  const [search, setSearch] = useState("");
 
   const handleSearch = async () => {
-    if (!searchPlate) {
+    if (!search.trim()) {
       fetchPage("initial");
       return;
     }
 
-    // cari unit berdasarkan plate
-    const unitSnap = await getDocs(
+    const keyword = search;
+
+    // =========================
+    // SEARCH CUSTOMER NAME
+    // =========================
+    const customerSnapByName = await getDocs(
       query(
-        collection(db, "units"),
-        where("plate", ">=", searchPlate.toUpperCase()),
-        where("plate", "<=", searchPlate.toUpperCase() + "\uf8ff")
+        collection(db, "customers"),
+        orderBy("name"),
+        where("name", ">=", keyword),
+        where("name", "<=", keyword + "\uf8ff")
       )
     );
 
-    if (unitSnap.empty) {
+    // =========================
+    // SEARCH UNIT PLATE
+    // =========================
+    const unitSnap = await getDocs(
+      query(
+        collection(db, "units"),
+        orderBy("plate"),
+        where("plate", ">=", keyword),
+        where("plate", "<=", keyword + "\uf8ff")
+      )
+    );
+
+    // customer ids dari hasil plate
+    const customerIdsFromUnits = unitSnap.docs.map((d) => d.data().customerId);
+
+    // customer ids dari hasil nama
+    const customerIdsFromCustomers = customerSnapByName.docs.map((d) => d.id);
+
+    // gabungkan + unique
+    const customerIds = [
+      ...new Set([...customerIdsFromUnits, ...customerIdsFromCustomers]),
+    ];
+
+    if (customerIds.length === 0) {
       setCustomers([]);
       return;
     }
 
-    const customerIds = [
-      ...new Set(unitSnap.docs.map((doc) => doc.data().customerId)),
-    ];
+    // Firestore IN max 10
+    const chunks = [];
+    for (let i = 0; i < customerIds.length; i += 10) {
+      chunks.push(customerIds.slice(i, i + 10));
+    }
 
-    // ambil customer dari hasil unit
-    const customerSnap = await getDocs(
-      query(collection(db, "customers"), where("__name__", "in", customerIds))
+    const customerResults = await Promise.all(
+      chunks.map((chunk) =>
+        getDocs(
+          query(collection(db, "customers"), where("__name__", "in", chunk))
+        )
+      )
     );
 
-    // mapping unit ke customer
+    // =========================
+    // GET ALL UNITS
+    // =========================
+    const allUnitResults = await Promise.all(
+      chunks.map((chunk) =>
+        getDocs(
+          query(collection(db, "units"), where("customerId", "in", chunk))
+        )
+      )
+    );
+
     const unitsByCustomer: Record<string, any[]> = {};
 
-    unitSnap.docs.forEach((doc: any) => {
-      const data = { id: doc.id, ...doc.data() };
-      const customerId = data.customerId;
+    allUnitResults.forEach((snap) => {
+      snap.docs.forEach((doc) => {
+        const data = {
+          id: doc.id,
+          ...doc.data(),
+        };
 
-      if (!unitsByCustomer[customerId]) {
-        unitsByCustomer[customerId] = [];
-      }
+        const customerId = data.customerId;
 
-      unitsByCustomer[customerId].push(data);
+        if (!unitsByCustomer[customerId]) {
+          unitsByCustomer[customerId] = [];
+        }
+
+        unitsByCustomer[customerId].push(data);
+      });
     });
 
-    const result: Customer[] = customerSnap.docs.map((d) => {
-      const data = d.data() as Customer;
+    // =========================
+    // FINAL RESULT
+    // =========================
+    const result: Customer[] = [];
 
-      return {
-        id: d.id,
-        ...data,
-        units: unitsByCustomer[d.id] || [],
-      };
+    customerResults.forEach((snap) => {
+      snap.docs.forEach((d) => {
+        const data = d.data() as Customer;
+
+        result.push({
+          id: d.id,
+          ...data,
+          units: unitsByCustomer[d.id] || [],
+        });
+      });
     });
 
     setCustomers(result);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-800 text-gray-100 p-6 font-mono">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-3xl font-bold text-cyan-400 drop-shadow-[0_0_8px_#00ffff]">
-            Customers
-          </h2>
+    <div className="p-2">
+      <div className="max-w-6xl mx-auto bg-white border border-[#CFE8F6] rounded-3xl shadow-sm p-10">
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+          <h2 className="text-3xl font-bold text-[#0070B2]">Customers</h2>
+
           <button
             onClick={() => setOpen(true)}
-            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-md shadow-lg shadow-cyan-500/30 transition-transform hover:scale-105"
+            className="
+          bg-[#0070B2]
+          hover:bg-[#005f96]
+          text-white
+          px-5 py-2.5
+          rounded-xl
+          transition
+          shadow-sm
+        "
           >
             + Tambah Customer
           </button>
         </div>
-        <div className="mb-4 flex gap-2">
+
+        {/* SEARCH */}
+        <div className="mb-6 flex flex-col md:flex-row gap-3">
           <input
             type="text"
-            placeholder="Search plate..."
-            value={searchPlate}
-            onChange={(e) => setSearchPlate(e.target.value.toUpperCase())}
-            className="px-3 py-2 bg-gray-800 border border-cyan-700 rounded w-full"
+            placeholder="Search customer / plate..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="
+          w-full px-4 py-2.5 rounded-xl
+          border border-[#CFE8F6]
+          bg-white
+          text-slate-700
+          focus:outline-none
+          focus:ring-2
+          focus:ring-[#0070B2]/20
+          focus:border-[#0070B2]
+        "
           />
+
           <button
             onClick={handleSearch}
-            className="px-4 py-2 bg-cyan-600 rounded"
+            className="
+          px-5 py-2.5 rounded-xl
+          bg-[#0070B2]
+          hover:bg-[#005f96]
+          text-white
+          transition
+          whitespace-nowrap
+        "
           >
             Search
           </button>
         </div>
 
-        <div className="bg-gray-900/60 rounded-xl border border-cyan-700/40 backdrop-blur-md shadow-md shadow-cyan-700/20 p-4">
-          {customers.length === 0 && (
-            <p className="text-gray-400 text-center py-8">
-              No customers found.
-            </p>
-          )}
-          <ul className="divide-y divide-gray-700">
+        {/* CUSTOMER LIST */}
+        {customers.length === 0 ? (
+          <div className="py-16 text-center text-slate-400">
+            No customers found.
+          </div>
+        ) : (
+          <ul className="bg-white border border-[#CFE8F6] rounded-2xl shadow-sm overflow-hidden">
             {customers.map((c) => (
               <li
-                onClick={() => nav(`/customers/${c.id}`)}
                 key={c.id}
-                className="flex justify-between items-center py-3 px-2 hover:bg-cyan-950/30 rounded-md transition"
+                onClick={() => nav(`/customers/${c.id}`)}
+                className="
+              flex justify-between items-start gap-4
+              px-5 py-4
+              border-b border-[#EEF7FC]
+              last:border-b-0
+              hover:bg-[#F8FBFD]
+              hover:shadow-sm
+              transition
+              cursor-pointer
+            "
               >
-                <div>
+                {/* LEFT */}
+                <div className="flex-1">
                   <Link
                     to={`/customers/${c.id}`}
-                    className="text-lg text-cyan-300 hover:text-cyan-400 block"
+                    className="font-semibold text-slate-700 text-lg"
                   >
                     {c.name}
                   </Link>
-                  <p className="text-sm text-gray-400">
-                    📞 {c.telepon || "-"} <br />
-                    📍 {c.address || "-"}
-                    <br />
-                  </p>
-                  <div
-                    className="text-sm text-gray-400 "
-                    style={{ display: "flex" }}
-                  >
-                    <FaMotorcycle />
-                    <div style={{ marginLeft: 10, display: "flex" }}>
-                      {" "}
-                      {c?.units?.map((u: any) => (
-                        <p key={u.plate}>{u.plate}| </p>
-                      ))}
-                    </div>
+
+                  <div className="mt-2 space-y-1 text-sm text-slate-500">
+                    <p>📞 {c.telepon || "-"}</p>
+                    <p>📍 {c.address || "-"}</p>
+                  </div>
+
+                  {/* UNITS */}
+                  <div className="flex items-center gap-2 mt-3 flex-wrap">
+                    <FaMotorcycle className="text-[#0070B2]" />
+
+                    {c?.units?.map((u: any) => (
+                      <span
+                        key={u.plate}
+                        className="
+                      px-3 py-1
+                      rounded-full
+                      bg-[#EAF6FD]
+                      text-[#0070B2]
+                      text-xs
+                      font-medium
+                    "
+                      >
+                        {u.plate}
+                      </span>
+                    ))}
                   </div>
                 </div>
+
+                {/* RIGHT */}
                 <button
-                  onClick={() => remove(c.id!)}
-                  className="text-red-500 hover:text-red-400 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    remove(c.id!);
+                  }}
+                  className="
+                px-3 py-2 rounded-xl
+                text-red-500
+                hover:bg-red-50
+                transition
+                text-sm
+              "
                 >
                   Hapus
                 </button>
               </li>
             ))}
           </ul>
-          <div
-            style={{
-              marginTop: 20,
-              display: "flex",
-              justifyContent: "space-between",
-            }}
-          >
-            <button
-              onClick={() => fetchPage("prev")}
-              className="flex items-center gap-1"
-            >
-              <HiOutlineArrowLeft className="w-4 h-4" />
-              Prev
-            </button>
+        )}
 
-            <button
-              onClick={() => fetchPage("next")}
-              className="flex items-center gap-1"
-            >
-              Next
-              <HiOutlineArrowRight className="w-4 h-4" />
-            </button>
-          </div>
+        {/* PAGINATION */}
+        <div className="mt-6 flex justify-between items-center">
+          <button
+            onClick={() => fetchPage("prev")}
+            className="
+          flex items-center gap-2
+          px-4 py-2
+          rounded-xl
+          border border-[#CFE8F6]
+          hover:bg-[#F8FBFD]
+          text-slate-600
+          transition
+        "
+          >
+            <HiOutlineArrowLeft className="w-4 h-4" />
+            Prev
+          </button>
+
+          <button
+            onClick={() => fetchPage("next")}
+            className="
+          flex items-center gap-2
+          px-4 py-2
+          rounded-xl
+          border border-[#CFE8F6]
+          hover:bg-[#F8FBFD]
+          text-slate-600
+          transition
+        "
+          >
+            Next
+            <HiOutlineArrowRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      {/* Add Customer Dialog */}
+      {/* ================= MODAL ================= */}
       {open && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
-          {/* <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[90vh] overflow-hidden"> */}
-          <div className="overflow-y-auto max-h-[90vh] p-4">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="overflow-y-auto max-h-[90vh]">
             <form
               onSubmit={create}
-              className="bg-gray-900 border border-cyan-700 rounded-xl p-6 w-full max-w-md shadow-xl shadow-cyan-700/40 relative animate-fadeIn"
+              className="
+            bg-white
+            border border-[#CFE8F6]
+            rounded-3xl
+            p-6
+            w-full
+            max-w-md
+            shadow-xl
+            relative
+            animate-fadeIn
+          "
             >
-              <h3 className="text-2xl font-bold text-cyan-400 mb-4">
+              {/* TITLE */}
+              <h3 className="text-2xl font-bold text-[#0070B2] mb-5">
                 Tambah Customer Baru
               </h3>
 
+              {/* CUSTOMER FORM */}
               <div className="space-y-4">
                 <div>
-                  <label className="block text-gray-300 mb-1">Nama</label>
+                  <label className="block text-slate-600 mb-1">Nama</label>
+
                   <input
                     type="text"
                     name="name"
                     placeholder="Enter customer name"
                     value={form.name}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 mb-1">No Telepon</label>
+                  <label className="block text-slate-600 mb-1">
+                    No Telepon
+                  </label>
+
                   <input
                     type="text"
                     name="telepon"
                     placeholder="Enter phone number"
                     value={form.telepon}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 mb-1">Alamat</label>
+                  <label className="block text-slate-600 mb-1">Alamat</label>
+
                   <textarea
                     name="address"
                     placeholder="Enter customer address"
                     value={form.address}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-cyan-400 resize-none"
                     rows={3}
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                  resize-none
+                "
                   />
                 </div>
               </div>
-              <h3 className="text-2xl font-bold text-cyan-400 mb-4">
+
+              {/* UNIT */}
+              <h3 className="text-xl font-bold text-[#0070B2] mt-8 mb-4">
                 Add New Unit
               </h3>
 
-              <div className="grid grid-cols-1 gap-3">
+              <div className="grid grid-cols-1 gap-4">
                 <div>
-                  <label className="block text-gray-300 mb-1">Merek</label>
+                  <label className="block text-slate-600 mb-1">Merek</label>
+
                   <input
-                    className="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500 w-full"
                     placeholder="e.g. Honda"
                     value={formUnit.make}
                     onChange={(e) =>
-                      setFormUnit({ ...formUnit, make: e.target.value })
+                      setFormUnit({
+                        ...formUnit,
+                        make: e.target.value,
+                      })
                     }
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 mb-1">Model</label>
+                  <label className="block text-slate-600 mb-1">Model</label>
+
                   <input
-                    className="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500 w-full"
                     placeholder="e.g. Supra X"
                     value={formUnit.model}
                     onChange={(e) =>
-                      setFormUnit({ ...formUnit, model: e.target.value })
+                      setFormUnit({
+                        ...formUnit,
+                        model: e.target.value,
+                      })
                     }
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 mb-1">
+                  <label className="block text-slate-600 mb-1">
                     Plate Number
                   </label>
+
                   <input
-                    className="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500 w-full uppercase"
                     placeholder="e.g. B 1234 XYZ"
                     value={formUnit.plate}
                     onChange={(e) =>
@@ -418,54 +622,99 @@ export default function Customers() {
                         plate: e.target.value.toUpperCase(),
                       })
                     }
+                    className="
+                  w-full px-4 py-2 uppercase
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-300 mb-1">Tahun</label>
+                  <label className="block text-slate-600 mb-1">Tahun</label>
+
                   <input
                     type="number"
-                    className="bg-gray-800 text-gray-200 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-cyan-500 w-full"
                     placeholder="e.g. 2020"
                     value={formUnit.year}
                     onChange={(e) =>
-                      setFormUnit({ ...formUnit, year: e.target.value })
+                      setFormUnit({
+                        ...formUnit,
+                        year: e.target.value,
+                      })
                     }
+                    className="
+                  w-full px-4 py-2
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
                   />
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 mt-6">
+              {/* ACTIONS */}
+              <div className="flex justify-end gap-3 mt-8">
                 <button
                   type="button"
                   onClick={() => setOpen(false)}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-gray-200"
+                  className="
+                px-4 py-2 rounded-xl
+                border border-[#CFE8F6]
+                hover:bg-[#F8FBFD]
+                text-slate-600
+                transition
+              "
                 >
                   Cancel
                 </button>
+
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded text-white shadow-cyan-500/40 shadow-lg"
+                  className="
+                px-5 py-2 rounded-xl
+                bg-[#0070B2]
+                hover:bg-[#005f96]
+                text-white
+                transition
+              "
                 >
                   Save
                 </button>
               </div>
             </form>
-            {/* </div> */}
           </div>
         </div>
       )}
 
-      {/* Animation */}
+      {/* ANIMATION */}
       <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: scale(0.95); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        .animate-fadeIn {
-          animation: fadeIn 0.25s ease-out;
-        }
-      `}</style>
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: scale(0.96);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .animate-fadeIn {
+      animation: fadeIn 0.2s ease-out;
+    }
+  `}</style>
     </div>
   );
 }

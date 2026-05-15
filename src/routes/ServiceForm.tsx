@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -10,59 +9,89 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import { createServiceOrderWithItems } from "../utils/firestore";
-import { Customer, Mechanic, Sparepart, Unit } from "@/types";
+import { Customer, Sparepart, Unit } from "@/types";
 import { useNavigate } from "react-router-dom";
+import { generateServiceId } from "@/components/Counter";
 
 export default function ServiceForm() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [parts, setParts] = useState<Sparepart[]>([]);
-  const [mechanics, setMechanics] = useState<Mechanic[]>([]);
+
   const nav = useNavigate();
 
   const [form, setForm] = useState({
     customerId: "",
     unitId: "",
-    mechanicId: "",
-    laborCost: 0,
-    note: "",
   });
+
   const [items, setItems] = useState<
     { partId: string; qty: number; price: number }[]
   >([]);
+
+  /* ================= LOAD DATA ================= */
 
   useEffect(() => {
     async function load() {
       const cs = await getDocs(collection(db, "customers"));
       setCustomers(
-        cs.docs.map((d) => ({ id: d.id, ...(d.data() as Customer) }))
+        cs.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Customer),
+        }))
       );
+
       const us = await getDocs(collection(db, "units"));
-      setUnits(us.docs.map((d) => ({ id: d.id, ...(d.data() as Unit) })));
+      setUnits(
+        us.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Unit),
+        }))
+      );
+
       const ps = await getDocs(collection(db, "spareparts"));
-      setParts(ps.docs.map((d) => ({ ...(d.data() as Sparepart), id: d.id })));
-      const ms = await getDocs(collection(db, "mechanics"));
-      setMechanics(
-        ms.docs.map((d) => ({ ...(d.data() as Mechanic), id: d.id }))
+
+      setParts(
+        ps.docs.map((d) => ({
+          ...(d.data() as Sparepart),
+          id: d.id,
+        }))
       );
     }
+
     load();
   }, []);
 
+  /* ================= ADD PART ================= */
+
   function addItem(partId: string) {
     const p = parts.find((x) => x.id === partId);
+
     if (!p) return;
-    setItems((prev) => [...prev, { partId, qty: 1, price: p.price }]);
+
+    setItems((prev) => [
+      ...prev,
+      {
+        partId,
+        qty: 1,
+        price: p.price,
+      },
+    ]);
   }
+
+  /* ================= REMOVE PART ================= */
+
+  function removeItem(index: number) {
+    setItems((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  /* ================= SUBMIT ================= */
 
   const submit = async () => {
     try {
-      // create reference for new service document
-      const servicesCol = collection(db, "services");
-      const serviceDocRef = doc(servicesCol);
+      const serviceId = await generateServiceId();
+      const serviceDocRef = doc(db, "services", serviceId);
 
-      // prepare base service data
       const serviceData = {
         ...form,
         createdAt: serverTimestamp(),
@@ -70,14 +99,13 @@ export default function ServiceForm() {
         totalCost: 0,
       };
 
-      // create service document
       await setDoc(serviceDocRef, serviceData);
 
       let partsTotal = 0;
 
-      // iterate over items to add them to subcollection and update stock
       for (const item of items) {
         const partRef = doc(db, "spareparts", item.partId);
+
         const partSnap = await getDoc(partRef);
 
         if (!partSnap.exists()) {
@@ -85,6 +113,7 @@ export default function ServiceForm() {
         }
 
         const partData = partSnap.data() as any;
+
         const currentStock = partData.stock || 0;
 
         if (currentStock < item.qty) {
@@ -94,11 +123,14 @@ export default function ServiceForm() {
         // reduce stock
         await updateDoc(partRef, {
           stock: currentStock - item.qty,
+          sold: (partData.sold || 0) + item.qty,
         });
 
-        // add item to service/items subcollection
+        // save item
         const itemsCol = collection(serviceDocRef, "items");
+
         const itemDocRef = doc(itemsCol);
+
         await setDoc(itemDocRef, {
           partId: item.partId,
           qty: item.qty,
@@ -108,184 +140,153 @@ export default function ServiceForm() {
         partsTotal += item.qty * item.price;
       }
 
-      const totalCost = partsTotal + (form.laborCost || 0);
+      // update total
+      await updateDoc(serviceDocRef, {
+        totalCost: partsTotal,
+      });
 
-      // update service total
-      await updateDoc(serviceDocRef, { totalCost });
-
-      // alert("✅ Service created successfully!");
+      // reset
       setForm({
         customerId: "",
         unitId: "",
-        mechanicId: "",
-        laborCost: 0,
-        note: "",
       });
+
       setItems([]);
+
       nav(`/print-service/${serviceDocRef.id}`);
     } catch (e: any) {
       alert("❌ Error: " + e.message);
     }
   };
 
+  /* ================= UI ================= */
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black text-gray-100 p-6 font-mono">
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-3xl font-bold text-cyan-400 border-b border-cyan-700 pb-3 mb-6">
-          🛠️ Create Service Order
-        </h2>
+    <div className="p-2">
+      <div className="max-w-6xl mx-auto bg-white border border-[#CFE8F6] rounded-3xl shadow-sm p-8">
+        {/* ================= HEADER ================= */}
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-[#0070B2]">
+            🛠️ Create Service Order
+          </h2>
 
-        {/* Customer & Unit Selection */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 backdrop-blur-md bg-gray-800/60 border border-gray-700 rounded-2xl p-5 shadow-xl shadow-cyan-900/30">
-          {/* Customer */}
-          <div className="flex flex-col">
-            <label className="text-sm text-cyan-300 mb-1">Customer</label>
-            <select
-              value={form.customerId}
-              onChange={(e) => setForm({ ...form, customerId: e.target.value })}
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            >
-              <option value="">Select customer</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Unit */}
-          <div className="flex flex-col">
-            <label className="text-sm text-cyan-300 mb-1">Unit</label>
-            <select
-              value={form.unitId}
-              onChange={(e) => setForm({ ...form, unitId: e.target.value })}
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            >
-              <option value="">Select unit</option>
-              {units
-                .filter((u) => u.customerId === form.customerId)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.make} {u.model} ({u.plate})
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {/* Mechanic */}
-          {/* <div className="flex flex-col">
-            <label className="text-sm text-cyan-300 mb-1">Mechanic</label>
-            <select
-              value={form.mechanicId}
-              onChange={(e) => setForm({ ...form, mechanicId: e.target.value })}
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            >
-              <option value="">Select mechanic</option>
-              {mechanics.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </div> */}
-
-          {/* Labor Cost */}
-          {/* <div className="flex flex-col">
-            <label className="text-sm text-cyan-300 mb-1">Labor Cost</label>
-            <input
-              type="number"
-              placeholder="Enter labor cost"
-              value={form.laborCost}
-              onChange={(e) =>
-                setForm({ ...form, laborCost: Number(e.target.value) })
-              }
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            />
-          </div>
-          <div className="flex flex-col">
-            <label className="text-sm text-cyan-300 mb-1">Catatan</label>
-            <input
-              type="text"
-              placeholder="Catatan"
-              value={form.note}
-              onChange={(e) => setForm({ ...form, note: e.target.value })}
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            />
-          </div> */}
+          <p className="text-slate-500 mt-2">
+            Create a new service transaction and add spareparts used.
+          </p>
         </div>
 
-        {/* Parts Selection 
-        <div className="mt-6 backdrop-blur-md bg-gray-800/60 border border-gray-700 rounded-2xl p-5 shadow-xl shadow-cyan-900/30">
-          <h3 className="text-xl font-semibold text-cyan-300 mb-3">
-            🔧 Parts Used
+        {/* ================= CUSTOMER & UNIT ================= */}
+        <div
+          className="
+            bg-[#F8FBFD]
+            border border-[#D9ECF7]
+            rounded-2xl
+            p-6
+            mb-6
+          "
+        >
+          <h3 className="text-lg font-semibold text-slate-700 mb-5">
+            Customer Information
           </h3>
 
-          <div className="flex flex-col mb-4">
-            <label className="text-sm text-cyan-300 mb-1">Select Part</label>
-            <select
-              onChange={(e) => {
-                addItem(e.target.value);
-                e.target.value = "";
-              }}
-              className="bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-3 py-2 flex-1 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-            >
-              <option value="">Add part...</option>
-              {parts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} — stock: {p.stock}
-                </option>
-              ))}
-            </select>
-          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* CUSTOMER */}
+            <div>
+              <label className="block text-sm font-medium text-slate-600 mb-2">
+                Customer
+              </label>
 
-          {items.length > 0 && (
-            <div className="divide-y divide-gray-700">
-              {items.map((it, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-4 py-2 px-2 hover:bg-gray-700/40 rounded transition-all"
-                >
-                  <div className="flex-1">
-                    {parts.find((p) => p.id === it.partId)?.name}
-                  </div>
-                  <div className="flex-1">
-                    {parts.find((p) => p.id === it.partId)?.category}
-                  </div>
+              <select
+                value={form.customerId}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    customerId: e.target.value,
+                    unitId: "",
+                  })
+                }
+                className="
+                  w-full
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  px-4 py-3
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
+              >
+                <option value="">Select customer</option>
 
-                  <div className="flex flex-col">
-                    <label className="text-xs text-cyan-300 mb-1">Qty</label>
-                    <input
-                      type="number"
-                      value={it.qty}
-                      onChange={(e) => {
-                        const qty = Number(e.target.value);
-                        setItems((prev) => {
-                          const copy = [...prev];
-                          copy[idx].qty = qty;
-                          return copy;
-                        });
-                      }}
-                      className="w-20 bg-gray-900 text-gray-100 border border-cyan-700 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                    />
-                  </div>
-
-                  <div className="w-24 text-green-400 font-semibold">
-                    Rp {it.price}
-                  </div>
-                </div>
-              ))}
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-        </div>*/}
 
-        {/* Submit */}
+            {/* UNIT */}
+            <div>
+              <label className="block text-sm font-medium text-slate-600 mb-2">
+                Unit
+              </label>
+
+              <select
+                value={form.unitId}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    unitId: e.target.value,
+                  })
+                }
+                className="
+                  w-full
+                  bg-white
+                  border border-[#CFE8F6]
+                  rounded-xl
+                  px-4 py-3
+                  text-slate-700
+                  focus:outline-none
+                  focus:ring-2
+                  focus:ring-[#0070B2]/20
+                  focus:border-[#0070B2]
+                "
+              >
+                <option value="">Select unit</option>
+
+                {units
+                  .filter((u) => u.customerId === form.customerId)
+                  .map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.make} {u.model} ({u.plate})
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* ================= TOTAL ================= */}
         <div className="mt-6 flex justify-end">
           <button
             onClick={submit}
-            className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-2xl font-semibold shadow-lg shadow-cyan-900/40 transition-all"
+            className="
+                mt-5
+                w-full
+                bg-[#0070B2]
+                hover:bg-[#005f96]
+                text-white
+                py-3
+                rounded-2xl
+                font-semibold
+                transition
+                shadow-sm
+              "
           >
-            ✅ Create Service
+            Create Service
           </button>
         </div>
       </div>
