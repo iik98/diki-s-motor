@@ -402,7 +402,7 @@ export default function PrintService() {
             }}
           >
             {/* left */}
-            <div>
+            <div style={{ width: '50%' }}>
               <p>ID: {service.id}</p>
               <p>Nama Customer: {customer?.name || "-"}</p>
               <p>No hp Customer: {customer?.telepon || "-"}</p>
@@ -445,9 +445,12 @@ export default function PrintService() {
               </p>
             </div>
             {/* right */}
-            <div>
+            <div style={{ width: '45%' }}>
               <p>Date: {formatToDate(service.createdAt?.toDate?.())}</p>
-              <p>Alamat Bengkel: Jl sblaska</p>
+              <p>Alamat Bengkel: Jl. Pabuaran No. 36 RT/RW 004/009
+                Kel. Harapan Jaya
+                Kec. Cibinong
+                Kab. Bogor 10914</p>
             </div>
           </div>
           <br />
