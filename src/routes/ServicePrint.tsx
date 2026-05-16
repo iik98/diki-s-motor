@@ -175,9 +175,9 @@ export default function PrintService() {
       {
         id: Date.now().toString(),
         partId: "",
-        packageName: "",
         qty: 1,
         price: 0,
+        discount: 0,
         isNew: true,
       },
     ]);
@@ -203,16 +203,16 @@ export default function PrintService() {
   };
 
   useEffect(() => {
-    if (!items.length || !Object.keys(parts).length) return;
+    if (!items.length) return;
 
     const jasa = items.filter((it) => {
       const part = parts[it.partId];
-      return part?.category === "jasa";
+      return part?.category === "jasa" || it.partId === "manual-jasa";
     });
 
     const part = items.filter((it) => {
       const partData = parts[it.partId];
-      return partData?.category !== "jasa";
+      return partData?.category !== "jasa" && it.partId !== "manual-jasa";
     });
 
     setJasaItems(jasa);
@@ -221,6 +221,12 @@ export default function PrintService() {
 
   const totalSparepart = partItems.reduce((sum, it) => {
     return sum + it.qty * it.price;
+  }, 0);
+  const totalDiscountSparepart = partItems.reduce((sum, it) => {
+    const subtotal = it.qty * it.price;
+    const discount = it.discount || 0;
+    const discountAmount = subtotal * (discount / 100);
+    return sum + discountAmount;
   }, 0);
   const totalDiscountJasa = jasaItems.reduce((sum, it) => {
     const subtotal = it.qty * it.price;
@@ -233,7 +239,7 @@ export default function PrintService() {
     return sum + it.qty * it.price;
   }, 0);
 
-  const grandTotal = totalSparepart + totalJasa - totalDiscountJasa;
+  const grandTotal = totalSparepart + totalJasa - totalDiscountJasa - totalDiscountSparepart;
 
   const handleSaveToFirestore = async () => {
     if (!service?.id) return;
@@ -262,17 +268,38 @@ export default function PrintService() {
       await Promise.all(deletePromises);
 
       // ===== SAVE NEW ITEMS (JASA + PART) =====
+      const resolvedJasaItems = await Promise.all(
+        jasaItems.map(async (it) => {
+          let partId = it.partId || it.jasaId;
+
+          if (partId === "manual" || partId === "manual-jasa") {
+            const newDocRef = await addDoc(collection(db, "spareparts"), {
+              name: it.name || "Manual Jasa",
+              price: it.price,
+              category: "jasa",
+              stock: 0,
+              lowStockThreshold: 0,
+              sku: "",
+            });
+            partId = newDocRef.id;
+          }
+
+          return {
+            partId: partId,
+            qty: it.qty,
+            price: it.price,
+            discount: it.discount || 0,
+          };
+        })
+      );
+
       const allItems = [
-        ...jasaItems.map((it) => ({
-          partId: it.partId || it.jasaId || "manual-jasa",
-          qty: it.qty,
-          price: it.price,
-          discount: it.discount || 0,
-        })),
+        ...resolvedJasaItems,
         ...partItems.map((it) => ({
           partId: it.partId,
           qty: it.qty,
           price: it.price,
+          discount: it.discount || 0,
         })),
       ];
 
@@ -391,6 +418,7 @@ export default function PrintService() {
                   mechanic?.name
                 ) : (
                   <select
+
                     name="mechanicId"
                     value={service?.mechanicId || ""}
                     onChange={(e) => {
@@ -459,44 +487,62 @@ export default function PrintService() {
                       style={{
                         border: "1px solid #000",
                         padding: "6px",
-                        width: 180,
+                        width: 100,
                       }}
                     >
                       {it.isNew && !isPrinting ? (
-                        <select
-                          value={it.jasaId || ""}
-                          onChange={(e) => {
-                            const selectedPart = allJasa.find(
-                              (p: { id: string }) => p.id === e.target.value
-                            );
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <select
+                            value={it.jasaId || it.partId || ""}
+                            onChange={(e) => {
+                              if (e.target.value === "manual") {
+                                handleChange("jasa", it.id, "jasaId", "manual");
+                                handleChange("jasa", it.id, "name", "");
+                                handleChange("jasa", it.id, "price", 0);
+                              } else {
+                                const selectedPart = allJasa.find(
+                                  (p: { id: string }) => p.id === e.target.value
+                                );
 
-                            handleChange(
-                              "jasa",
-                              it.id,
-                              "jasaId",
-                              e.target.value
-                            );
-                            handleChange(
-                              "jasa",
-                              it.id,
-                              "price",
-                              selectedPart?.price || 0
-                            );
-                            handleChange(
-                              "jasa",
-                              it.id,
-                              "name",
-                              selectedPart?.name || ""
-                            );
-                          }}
-                        >
-                          <option hidden>Pilih Jasa</option>
-                          {allJasa.map((p: any) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
+                                handleChange(
+                                  "jasa",
+                                  it.id,
+                                  "jasaId",
+                                  e.target.value
+                                );
+                                handleChange(
+                                  "jasa",
+                                  it.id,
+                                  "price",
+                                  selectedPart?.price || 0
+                                );
+                                handleChange(
+                                  "jasa",
+                                  it.id,
+                                  "name",
+                                  selectedPart?.name || ""
+                                );
+                              }
+                            }}
+                          >
+                            <option hidden>Pilih Jasa</option>
+                            <option value="manual">-- Input Manual --</option>
+                            {allJasa.map((p: any) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                          {(it.jasaId === "manual" || it.partId === "manual-jasa") && (
+                            <input
+                              type="text"
+                              placeholder="Nama Jasa Manual"
+                              value={it.name || ""}
+                              onChange={(e) => handleChange("jasa", it.id, "name", e.target.value)}
+                              style={{ width: "100%", padding: "4px" }}
+                            />
+                          )}
+                        </div>
                       ) : (
                         part?.name || it.name || "-"
                       )}
@@ -620,10 +666,10 @@ export default function PrintService() {
             <thead>
               <tr>
                 <th style={thStyle}>No</th>
-                <th style={thStyle}>Paket</th>
                 <th style={thStyle}>Nama Item</th>
                 <th style={thStyle}>Qty</th>
                 <th style={thStyle}>Harga</th>
+                <th style={thStyle}>Disc</th>
                 <th style={thStyle}>Total</th>
                 {!isPrinting && <th style={thStyle}></th>}
               </tr>
@@ -638,9 +684,6 @@ export default function PrintService() {
                     {/* NO */}
                     <td style={tdStyle}>{index + 1}</td>
 
-                    {/* PACKAGE */}
-                    <td style={tdStyle}>{it.packageName || "-"}</td>
-
                     {/* NAMA ITEM (DROPDOWN) */}
                     <td
                       style={{
@@ -651,6 +694,9 @@ export default function PrintService() {
                     >
                       {it.isNew && !isPrinting ? (
                         <select
+                          style={{
+                            // width: 180
+                          }}
                           value={it.partId || ""}
                           onChange={(e) => {
                             const selectedPart = allParts.find(
@@ -719,9 +765,35 @@ export default function PrintService() {
                       Rp {(it.price || 0).toLocaleString("id-ID")}
                     </td>
 
+                    {/* DISCOUNT */}
+                    <td style={tdStyle}>
+                      {it.isNew && !isPrinting ? (
+                        <div style={{ display: "flex" }}>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={it.discount || 0}
+                            onChange={(e) =>
+                              handleChange(
+                                "part",
+                                it.id,
+                                "discount",
+                                Number(e.target.value)
+                              )
+                            }
+                            style={{ width: 60 }}
+                          />
+                          <span>%</span>
+                        </div>
+                      ) : (
+                        `${it.discount || 0}%`
+                      )}
+                    </td>
+
                     {/* TOTAL */}
                     <td style={tdStyle}>
-                      Rp {(it.qty * it.price || 0).toLocaleString("id-ID")}
+                      Rp {((it.qty * it.price) - (it.qty * it.price * (it.discount || 0) / 100)).toLocaleString("id-ID")}
                     </td>
                     {!isPrinting && (
                       <td style={tdStyle}>
@@ -772,7 +844,7 @@ export default function PrintService() {
             </div>
             <div style={rowStyle}>
               <span>Total Discount</span>
-              <span>- Rp {totalDiscountJasa.toLocaleString("id-ID")}</span>
+              <span>- Rp {(totalDiscountJasa + totalDiscountSparepart).toLocaleString("id-ID")}</span>
             </div>
 
             <div

@@ -6,4 +6,4 @@ export interface Unit { id?: string; customerId: string; make: string; model: st
 export interface Sparepart { id: string; name: string; sku?: string; stock: number; price: number; lowStockThreshold: number,category:string }
 export interface Mechanic { id: string; name: string; phone?: string; skills?: string[] }
 export interface ServiceOrder { id: string; customerId: string; unitId: string; mechanicId: string; laborCost: number; totalCost: number; status?: string; createdAt?: any ,note?:string,bookingDate?:any,keluhan?:string}
-export interface ServiceItem { id?: string; partId: string; qty: number; price: number }
+export interface ServiceItem { id?: string; partId: string; qty: number; price: number; name?: string; discount?: number }
